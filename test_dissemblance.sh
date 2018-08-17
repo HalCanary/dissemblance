@@ -34,6 +34,10 @@ test '(> 1 2)' '()'
 test '(> 1 2)' '()'
 test '(< 1 2)' '1'
 
+#RECURSION!
+test '(begin (define fib (lambda (x) (if (== 0 x) 1 (* x (fib (- x 1)))))) (fib 5))' '120'
+
+
 if [ "$GOOD" ]; then
     echo good
 else
