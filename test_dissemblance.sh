@@ -38,6 +38,8 @@ test '(< 1 2)' '1'
 test '(begin (define fib (lambda (x) (if (== 0 x) 1 (* x (fib (- x 1)))))) (fib 5))' '120'
 
 test '(begin (define foo (lambda () (define bar 42) bar)) (foo))' '42'
+test '(quote foo)' 'foo'
+test '(quote (foo bar baz))' '(foo bar baz)'
 
 if [ "$GOOD" ]; then
     echo good
