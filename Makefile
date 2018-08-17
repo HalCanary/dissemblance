@@ -1,4 +1,13 @@
-all: bin/dissemblance
+.PHONY: test clean
+
+test: bin/dissemblance
 	./test_dissemblance.sh
+
+CXXFLAGS := $(CXXFLAGS) --std=c++11
+
 bin/dissemblance: dissemblance.cpp number.h
-	c++ -fno-exceptions -g --std=c++11 dissemblance.cpp -o bin/dissemblance
+	mkdir -p bin
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
+
+clean:
+	rm -rf bin
