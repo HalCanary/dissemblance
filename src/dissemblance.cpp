@@ -10,33 +10,38 @@
 
 using namespace dissemblance;
 
-namespace {
+static const Cons* dcastCons(const std::shared_ptr<Expression>& u) {
+    return u ? u->asCons() : nullptr;
+}
+static const Symbol* dcastSymbol(const std::shared_ptr<Expression>& u) {
+    return u ? u->asSymbol() : nullptr;
+}
+static const NumberValue* dcastNumberValue(const std::shared_ptr<Expression>& u) {
+    return u ? u->asNumberValue() : nullptr;
+}
 
-struct NumberValue : public Expression {
+struct dissemblance::NumberValue : public Expression {
     Number value;
     NumberValue(Number v) : value(v) {}
+    const NumberValue* asNumberValue() const override { return this; }
     void serialize(std::ostream* o) const override {
         return value.serialize(o);
     }
 };
 
-struct Symbol : public Expression {
+struct dissemblance::Symbol : public Expression {
     std::string name ;
     Symbol(const std::string& n) : name(n) {}
+    const Symbol* asSymbol() const override { return this; }
     void serialize(std::ostream* o) const override { *o << name; }
 };
 
-template <class T, class U>
-const T* dcast(const std::shared_ptr<U>& u) {
-    return dynamic_cast<const T*>(u.get());
-}
-
-struct Cons : public Expression {
+struct dissemblance::Cons : public Expression {
     std::shared_ptr<Expression> left;
     std::shared_ptr<Expression> right;
     Cons(std::shared_ptr<Expression> l, std::shared_ptr<Expression> r)
         : left(std::move(l)), right(std::move(r)) {}
-    bool isCons() const override { return true; }
+    const Cons* asCons() const override { return this; }
     void serialize(std::ostream* o) const override {
         *o << "(";
         this->innerSerialize(o);
@@ -45,7 +50,7 @@ struct Cons : public Expression {
     void innerSerialize(std::ostream* o) const {
         Expression::Serialize(left.get(), o);
         const Cons* current = this;
-        while (const Cons* rightCons = dcast<Cons>(current->right)) {
+        while (const Cons* rightCons = dcastCons(current->right)) {
             *o << " ";
             Expression::Serialize(rightCons->left.get(), o);
             current = rightCons;
@@ -56,6 +61,16 @@ struct Cons : public Expression {
         }
     }
 };
+
+struct dissemblance::Procedure : public Expression {
+public:
+    const Procedure* asProcedure() const override { return this; }
+    virtual std::shared_ptr<Expression> eval(
+            const std::shared_ptr<Expression>& expr,
+            std::shared_ptr<Environment>& env) const = 0;
+};
+
+namespace {
 
 struct Token {
     enum Type {
@@ -178,7 +193,7 @@ std::shared_ptr<Expression> parse_expression(Tokenizer* tokenizer) {
 
 int length(const std::shared_ptr<Expression>& expr, int accumulator = 0) {
     if (!expr) { return accumulator; }
-    const Cons* c = dcast<Cons>(expr);
+    const Cons* c = dcastCons(expr);
     if (!c) {
         return -1; // not well formed list
     }
@@ -187,7 +202,7 @@ int length(const std::shared_ptr<Expression>& expr, int accumulator = 0) {
 
 const std::shared_ptr<Expression>& get_item(
         const std::shared_ptr<Expression>& expr, int index) {
-    const Cons* cons = dcast<Cons>(expr);
+    const Cons* cons = dcastCons(expr);
     assert(cons);
     if (0 == index) {
         return cons->left;
@@ -196,15 +211,9 @@ const std::shared_ptr<Expression>& get_item(
     }
 }
 
-struct Procedure : public Expression {
-public:
-    virtual std::shared_ptr<Expression> eval(
-            const std::shared_ptr<Expression>& expr,
-            std::shared_ptr<Environment>& env) const = 0;
-};
 
 const std::string& get_symbol(const std::shared_ptr<Expression>& expr) {
-    const Symbol* symbol = dcast<Symbol>(expr);
+    const Symbol* symbol = dcastSymbol(expr);
     if (!symbol) {
         std::cerr << "missing symbol: ";
         Expression::Serialize(expr.get(), &std::cerr);
@@ -239,7 +248,7 @@ private:
     static std::shared_ptr<Expression> Beginner(
             const std::shared_ptr<Expression>& expr,
             std::shared_ptr<Environment>& env) {
-        const Cons* cons = dcast<Cons>(expr);
+        const Cons* cons = dcastCons(expr);
         assert(cons); // takes list
         auto value = Eval(cons->left, env);
         if (cons->right) {
@@ -259,7 +268,7 @@ public:
     // (lambda (x y) (+ 3 x y))
     LambdaProc(std::shared_ptr<Expression> expr, std::shared_ptr<Environment>& env)
         : environment(env) {
-        const Cons* cons = dcast<Cons>(expr);
+        const Cons* cons = dcastCons(expr);
         assert(cons); // takes list
         parameters = cons->left;
         assert(length(parameters) >= 0);
@@ -273,20 +282,20 @@ public:
         *o << "(lambda ";
         Expression::Serialize(parameters.get(), o);
         *o << " ";
-        dcast<Cons>(dcast<Cons>(procedure)->right)->innerSerialize(o);
+        dcastCons(dcastCons(procedure)->right)->innerSerialize(o);
         *o << ")";
     }
     std::shared_ptr<Expression> eval(
             const std::shared_ptr<Expression>& arguments,
             std::shared_ptr<Environment>& env) const override {
         auto scope = std::make_shared<Environment>(environment);
-        const Cons* params = dcast<Cons>(parameters);
-        const Cons* args = dcast<Cons>(arguments);
+        const Cons* params = dcastCons(parameters);
+        const Cons* args = dcastCons(arguments);
         while (params) {
             const std::string& symb = get_symbol(params->left);
             scope->set(symb, Eval(args->left, env));
-            params = dcast<Cons>(params->right);
-            args = dcast<Cons>(args->right);
+            params = dcastCons(params->right);
+            args = dcastCons(args->right);
             assert((params == nullptr) == (args == nullptr));
         }
         return Eval(procedure, scope);
@@ -304,7 +313,7 @@ public:
 };
 
 const Number& to_number(const std::shared_ptr<Expression>& expr) {
-    const NumberValue* nv = dcast<NumberValue>(expr);
+    const NumberValue* nv = dcastNumberValue(expr);
     assert(nv);  // is a number
     return nv->value;
 }
@@ -317,7 +326,7 @@ class Accumulate : public Procedure {
             const std::shared_ptr<Expression>& expr,
             std::shared_ptr<Environment>& env,
             Number accumulator) {
-        const Cons* c = dcast<Cons>(expr);
+        const Cons* c = dcastCons(expr);
         if (!c) {
             return accumulator;
         } else {
@@ -469,7 +478,7 @@ void dissemblance::Environment::set(const std::string& s, std::shared_ptr<Expres
 
 std::shared_ptr<Expression> dissemblance::Environment::get(
         const std::shared_ptr<Expression>& e) const {
-    const Symbol* s = dcast<Symbol>(e);
+    const Symbol* s = dcastSymbol(e);
     return s ? this->get(s->name) : nullptr;
 }
 
@@ -492,15 +501,15 @@ std::shared_ptr<Expression> dissemblance::Eval(
     if (!expr) {
         return nullptr;  // special case
     }
-    if (const Symbol* symbol = dcast<Symbol>(expr)) {
+    if (const Symbol* symbol = dcastSymbol(expr)) {
         return env->get(symbol->name);
     }
-    const Cons* cons = dcast<Cons>(expr);
+    const Cons* cons = dcastCons(expr);
     if (!cons) {
         return expr;  // e. g. number;
     }
     auto x = Eval(cons->left, env);
-    const Procedure* proc = dynamic_cast<const Procedure*>(x.get());
+    const Procedure* proc = x->asProcedure();
     assert(proc);
     return proc->eval(cons->right, env);
 }

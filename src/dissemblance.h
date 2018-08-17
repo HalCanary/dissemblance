@@ -15,15 +15,21 @@
 
 namespace dissemblance {
 
+struct Cons;
+struct NumberValue;
+struct Symbol;
+struct Procedure;
+
 class Expression {
 public:
     static void Serialize(const Expression*, std::ostream*);
     virtual ~Expression() {}
-private: 
-    virtual bool isCons() const { return false; }
+    virtual const Cons* asCons() const { return nullptr; }
+    virtual const NumberValue* asNumberValue() const { return nullptr; }
+    virtual const Symbol* asSymbol() const { return nullptr; }
+    virtual const Procedure* asProcedure() const { return nullptr; }
     virtual void serialize(std::ostream*) const = 0;
 };
-
 
 class Environment {
 public:
