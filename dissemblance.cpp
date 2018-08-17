@@ -14,7 +14,6 @@
 #include <sstream>
 #include <unordered_map>
 #include <vector>
-#include <typeinfo>
 
 #include "number.h"
 
@@ -28,6 +27,7 @@ const T* dcast(const std::shared_ptr<U>& u) {
 
 struct Expression {
     virtual void serialize(std::ostream*) const = 0;
+    virtual bool isCons() const { return false; }
     static void Serialize(const std::shared_ptr<Expression>& expr, std::ostream* o) {
         if (expr) {
             expr->serialize(o);
@@ -56,6 +56,7 @@ struct Cons : public Expression {
     std::shared_ptr<Expression> right;
     Cons(std::shared_ptr<Expression> l, std::shared_ptr<Expression> r)
         : left(std::move(l)), right(std::move(r)) {}
+    bool isCons() const override { return true; }
     void serialize(std::ostream* o) const override {
         *o << "(";
         this->innerSerialize(o);
@@ -203,9 +204,9 @@ std::shared_ptr<Expression> Parse(std::istream* i) {
 class Environment {
 private:
     std::unordered_map<std::string, std::shared_ptr<Expression> > map;
-    Environment* outer;  // todo: replace with std::shared_ptr<Environment>
+    std::shared_ptr<Environment> outer;
 public:
-    Environment(Environment* o = nullptr) : outer(o) {}
+    Environment(std::shared_ptr<Environment> o) : outer(std::move(o)) {}
     void set(const std::string& s, std::shared_ptr<Expression> expr) {
         map[s] = std::move(expr);
     }
@@ -221,14 +222,14 @@ public:
             if (i != emap->end()) {
                 return i->second;
             }
-            env = env->outer;
+            env = env->outer.get();
         } while (env);
         return nullptr;
     }
 };
 
 static bool is_list(const std::shared_ptr<Expression>& expr) {
-    return !expr || typeid(*expr.get()) == typeid(Cons);
+    return !expr || expr->isCons();
 }
 
 int length(const std::shared_ptr<Expression>& expr, int accumulator = 0) {
@@ -255,7 +256,7 @@ struct Procedure : public Expression {
 public:
     virtual std::shared_ptr<Expression> eval(
             const std::shared_ptr<Expression>& expr,
-            Environment* env) const = 0;
+            std::shared_ptr<Environment>& env) const = 0;
 };
 
 const std::string& get_symbol(const std::shared_ptr<Expression>& expr) {
@@ -272,7 +273,7 @@ const std::string& get_symbol(const std::shared_ptr<Expression>& expr) {
 
 std::shared_ptr<Expression> Eval(
         const std::shared_ptr<Expression>& expr,
-        Environment* env) {
+        std::shared_ptr<Environment>& env) {
     if (!expr) {
         return nullptr;  // special case
     }
@@ -294,7 +295,7 @@ public:
     void serialize(std::ostream* o) const override { *o << "quote"; }
     std::shared_ptr<Expression> eval(
             const std::shared_ptr<Expression>& expr,
-            Environment* env) const override {
+            std::shared_ptr<Environment>& env) const override {
         assert(1 == length(expr));
         return get_item(expr, 0);
     }
@@ -305,14 +306,14 @@ public:
     void serialize(std::ostream* o) const override { *o << "begin"; }
     std::shared_ptr<Expression> eval(
             const std::shared_ptr<Expression>& expr,
-            Environment* env) const override {
+            std::shared_ptr<Environment>& env) const override {
         return Begin::Beginner(expr, env);
     }
 
 private:
     static std::shared_ptr<Expression> Beginner(
             const std::shared_ptr<Expression>& expr,
-            Environment* env) {
+            std::shared_ptr<Environment>& env) {
         const Cons* cons = dcast<Cons>(expr);
         assert(cons); // takes list
         auto value = Eval(cons->left, env);
@@ -327,10 +328,12 @@ private:
 class LambdaProc : public Procedure {
     std::shared_ptr<Expression> parameters;
     std::shared_ptr<Expression> procedure;
+    std::shared_ptr<Environment> environment;
 public:
     // (lambda (x) (+ 3 x))
     // (lambda (x y) (+ 3 x y))
-    LambdaProc(std::shared_ptr<Expression> expr) {
+    LambdaProc(std::shared_ptr<Expression> expr, std::shared_ptr<Environment>& env)
+        : environment(env) {
         const Cons* cons = dcast<Cons>(expr);
         assert(cons); // takes list
         parameters = cons->left;
@@ -351,18 +354,18 @@ public:
     }
     std::shared_ptr<Expression> eval(
             const std::shared_ptr<Expression>& arguments,
-            Environment* env) const override {
-        Environment scope(env);
+            std::shared_ptr<Environment>& env) const override {
+        auto scope = std::make_shared<Environment>(environment);
         const Cons* params = dcast<Cons>(parameters);
         const Cons* args = dcast<Cons>(arguments);
         while (params) {
             const std::string& symb = get_symbol(params->left);
-            scope.set(symb, Eval(args->left, env));
+            scope->set(symb, Eval(args->left, env));
             params = dcast<Cons>(params->right);
             args = dcast<Cons>(args->right);
             assert((params == nullptr) == (args == nullptr));
         }
-        return Eval(procedure, &scope);
+        return Eval(procedure, scope);
     }
 };
 
@@ -371,9 +374,8 @@ public:
     void serialize(std::ostream* o) const override { *o << "LAMBDA"; }
     std::shared_ptr<Expression> eval(
             const std::shared_ptr<Expression>& expr,
-            Environment* /*env*/) const override {
-        // todo: capture Environemnt to make a closure.
-        return std::make_shared<LambdaProc>(expr);
+            std::shared_ptr<Environment>& env) const override {
+        return std::make_shared<LambdaProc>(expr, env);
     }
 };
 
@@ -388,7 +390,7 @@ template <BinOp Op, int Identity>
 class Accumulate : public Procedure {
     static Number Do(
             const std::shared_ptr<Expression>& expr,
-            Environment* env,
+            std::shared_ptr<Environment>& env,
             Number accumulator) {
         const Cons* c = dcast<Cons>(expr);
         if (!c) {
@@ -406,7 +408,7 @@ public:
     void serialize(std::ostream* o) const override { *o << name; }
     std::shared_ptr<Expression> eval(
             const std::shared_ptr<Expression>& expr,
-            Environment* env) const override {
+            std::shared_ptr<Environment>& env) const override {
         return std::make_shared<NumberValue>(
                 Accumulate<Op, Identity>::Do(expr, env, Number(Identity)));
     }
@@ -418,7 +420,7 @@ public:
     void serialize(std::ostream* o) const override { *o << "SUBTRACT"; }
     std::shared_ptr<Expression> eval(
             const std::shared_ptr<Expression>& expr,
-            Environment* env) const override {
+            std::shared_ptr<Environment>& env) const override {
         static const Number ZERO(0);
         switch (length(expr)) {
             case 1:
@@ -444,7 +446,7 @@ public:
     void serialize(std::ostream* o) const override { *o << name; }
     std::shared_ptr<Expression> eval(
             const std::shared_ptr<Expression>& expr,
-            Environment* env) const override {
+            std::shared_ptr<Environment>& env) const override {
         assert(2 == length(expr));
         return std::make_shared<NumberValue>(
                 Op(to_number(Eval(get_item(expr, 0), env)),
@@ -462,7 +464,7 @@ public:
     void serialize(std::ostream* o) const override { *o << name; }
     std::shared_ptr<Expression> eval(
             const std::shared_ptr<Expression>& expr,
-            Environment* env) const override {
+            std::shared_ptr<Environment>& env) const override {
         assert(2 == length(expr));
         if (Op(to_number(Eval(get_item(expr, 0), env)),
                to_number(Eval(get_item(expr, 1), env)))) {
@@ -479,7 +481,7 @@ public:
     void serialize(std::ostream* o) const override { *o << "if"; }
     std::shared_ptr<Expression> eval(
             const std::shared_ptr<Expression>& expr,
-            Environment* env) const override {
+            std::shared_ptr<Environment>& env) const override {
         //        0     1    2
         // (if . (cond then else))
         assert(3 == length(expr));
@@ -496,7 +498,7 @@ public:
     void serialize(std::ostream* o) const override { *o << "define"; }
     std::shared_ptr<Expression> eval(
             const std::shared_ptr<Expression>& expr,
-            Environment* env) const override {
+            std::shared_ptr<Environment>& env) const override {
         //            0        1
         // (define . (variable (+ b c d))
         assert(2 == length(expr));
@@ -519,7 +521,8 @@ struct NumberOps {
 };
 
 static std::shared_ptr<Environment> CoreEnvironemnt() {
-    std::shared_ptr<Environment> core = std::make_shared<Environment>();
+    std::shared_ptr<Environment> empty;
+    std::shared_ptr<Environment> core = std::make_shared<Environment>(empty);
     core->set("if", std::make_shared<If>());
     core->set("define", std::make_shared<Define>());
     core->set("quote", std::make_shared<Quote>());
@@ -547,7 +550,7 @@ int main() {
         //std::cout << std::endl;
 
         if (expr) {
-            Expression::Serialize(Eval(expr, env.get()), &std::cout);
+            Expression::Serialize(Eval(expr, env), &std::cout);
             std::cout << std::endl;
         } else {
             //std::cout << "\r\n";
