@@ -6,7 +6,7 @@
  */
 
 // Supported operators:
-//     if define quote + - begin lambda
+//     if define quote + - * / == != < > <= >= begin lambda
 
 #include <cassert>
 #include <iostream>
