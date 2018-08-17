@@ -211,7 +211,6 @@ const std::shared_ptr<Expression>& get_item(
     }
 }
 
-
 const std::string& get_symbol(const std::shared_ptr<Expression>& expr) {
     const Symbol* symbol = dcastSymbol(expr);
     if (!symbol) {
@@ -232,6 +231,24 @@ public:
             std::shared_ptr<Environment>& env) const override {
         assert(1 == length(expr));
         return get_item(expr, 0);
+    }
+};
+
+class List : public Procedure {
+    void serialize(std::ostream* o) const override { *o << "list"; }
+    std::shared_ptr<Expression> eval(
+            const std::shared_ptr<Expression>& expr,
+            std::shared_ptr<Environment>& env) const override {
+        std::shared_ptr<Cons> top;
+        if (const Cons* c = dcastCons(expr)) {
+            top = std::make_shared<Cons>(Eval(c->left, env), nullptr);
+            Cons* ptr = top.get();
+            while (c = dcastCons(c->right)) {
+                ptr->right = std::make_shared<Cons>(Eval(c->left, env), nullptr);
+                ptr = (Cons*)(ptr->right.get());
+            }
+        }
+        return top;
     }
 };
 
@@ -524,7 +541,9 @@ std::shared_ptr<Environment> dissemblance::CoreEnvironemnt() {
     core->set("-", std::make_shared<Subtract>());
     core->set("begin", std::make_shared<Begin>());
     core->set("lambda", std::make_shared<Lambda>());
+    core->set("list", std::make_shared<List>());
     core->set("/", std::make_shared<BinaryOperation<NumberOps::Divide> >("/"));
+    core->set("=", std::make_shared<ComparisonOperation<NumberOps::Equal> >("="));
     core->set("==", std::make_shared<ComparisonOperation<NumberOps::Equal> >("=="));
     core->set("!=", std::make_shared<ComparisonOperation<NumberOps::NotEqual> >("!="));
     core->set("<", std::make_shared<ComparisonOperation<NumberOps::LessThan> >("<"));
