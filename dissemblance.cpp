@@ -337,7 +337,6 @@ public:
         const Cons* cons = dcast<Cons>(expr);
         assert(cons); // takes list
         parameters = cons->left;
-        assert(parameters);
         assert(length(parameters) >= 0);
 
         assert(cons->right);
@@ -544,16 +543,11 @@ static std::shared_ptr<Environment> CoreEnvironemnt() {
 int main() {
     std::shared_ptr<Environment> env = CoreEnvironemnt();
     while (true) {
-        //std::cout << "> ";
         std::shared_ptr<Expression> expr = Parse(&std::cin);
-        //Expression::Serialize(expr, &std::cout);
-        //std::cout << std::endl;
-
         if (expr) {
             Expression::Serialize(Eval(expr, env), &std::cout);
             std::cout << std::endl;
         } else {
-            //std::cout << "\r\n";
             break;
         }
     }
