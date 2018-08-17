@@ -1,41 +1,16 @@
-/*
- * Copyright 2015 Google Inc.
- *
- * Use of this source code is governed by a BSD-style license that can be
- * found in the LICENSE file.
- */
+// Copyright 2015 Google LLC.
+// Use of this source code is governed by a BSD-style license that can be found in the LICENSE file.
 
-// Supported operators:
-//     if define quote + - * / == != < > <= >= begin lambda
+#include "dissemblance.h"
+#include "number.h"
 
 #include <cassert>
 #include <iostream>
-#include <memory>
 #include <sstream>
-#include <unordered_map>
-#include <vector>
 
-#include "number.h"
+using namespace dissemblance;
 
-struct Cons;
-struct Procedure;
-
-template <class T, class U>
-const T* dcast(const std::shared_ptr<U>& u) {
-    return dynamic_cast<const T*>(u.get());
-}
-
-struct Expression {
-    virtual void serialize(std::ostream*) const = 0;
-    virtual bool isCons() const { return false; }
-    static void Serialize(const std::shared_ptr<Expression>& expr, std::ostream* o) {
-        if (expr) {
-            expr->serialize(o);
-        } else {
-            *o << "()";
-        }
-    }
-};
+namespace {
 
 struct NumberValue : public Expression {
     Number value;
@@ -51,6 +26,11 @@ struct Symbol : public Expression {
     void serialize(std::ostream* o) const override { *o << name; }
 };
 
+template <class T, class U>
+const T* dcast(const std::shared_ptr<U>& u) {
+    return dynamic_cast<const T*>(u.get());
+}
+
 struct Cons : public Expression {
     std::shared_ptr<Expression> left;
     std::shared_ptr<Expression> right;
@@ -63,16 +43,16 @@ struct Cons : public Expression {
         *o << ")";
     }
     void innerSerialize(std::ostream* o) const {
-        Expression::Serialize(left, o);
+        Expression::Serialize(left.get(), o);
         const Cons* current = this;
         while (const Cons* rightCons = dcast<Cons>(current->right)) {
             *o << " ";
-            Expression::Serialize(rightCons->left, o);
+            Expression::Serialize(rightCons->left.get(), o);
             current = rightCons;
         }
         if (current->right) {
             *o << " . ";
-            current->right->serialize(o);
+            Expression::Serialize(current->right.get(), o);
         }
     }
 };
@@ -147,6 +127,7 @@ std::shared_ptr<Expression> MakeAtom(const std::string& s) {
 }
 
 std::shared_ptr<Expression> parse_expression(Tokenizer*);
+
 std::shared_ptr<Expression> parse_list(Tokenizer* tokenizer) {
     std::shared_ptr<Expression> left, right;
     Token token = tokenizer->next();
@@ -193,44 +174,7 @@ std::shared_ptr<Expression> parse_expression(Tokenizer* tokenizer) {
     }
 }
 
-std::shared_ptr<Expression> Parse(std::istream* i) {
-    assert(i);
-    Tokenizer tokenizer(i);
-    return parse_expression(&tokenizer);
-}
-
 ////////////////////////////////////////////////////////////////////////////////
-
-class Environment {
-private:
-    std::unordered_map<std::string, std::shared_ptr<Expression> > map;
-    std::shared_ptr<Environment> outer;
-public:
-    Environment(std::shared_ptr<Environment> o) : outer(std::move(o)) {}
-    void set(const std::string& s, std::shared_ptr<Expression> expr) {
-        map[s] = std::move(expr);
-    }
-    std::shared_ptr<Expression> get(const std::shared_ptr<Expression>& e) const {
-        const Symbol* s = dcast<Symbol>(e);
-        return s ? this->get(s->name) : nullptr;
-    }
-    std::shared_ptr<Expression> get(const std::string& s) const {
-        const Environment* env = this;
-        do {
-            const auto emap = &env->map;
-            auto i = emap->find(s);
-            if (i != emap->end()) {
-                return i->second;
-            }
-            env = env->outer.get();
-        } while (env);
-        return nullptr;
-    }
-};
-
-static bool is_list(const std::shared_ptr<Expression>& expr) {
-    return !expr || expr->isCons();
-}
 
 int length(const std::shared_ptr<Expression>& expr, int accumulator = 0) {
     if (!expr) { return accumulator; }
@@ -263,32 +207,13 @@ const std::string& get_symbol(const std::shared_ptr<Expression>& expr) {
     const Symbol* symbol = dcast<Symbol>(expr);
     if (!symbol) {
         std::cerr << "missing symbol: ";
-        expr->serialize(&std::cerr);
+        Expression::Serialize(expr.get(), &std::cerr);
         std::cerr << "\n";
     }
     assert(symbol);
     return symbol->name;
 }
 
-
-std::shared_ptr<Expression> Eval(
-        const std::shared_ptr<Expression>& expr,
-        std::shared_ptr<Environment>& env) {
-    if (!expr) {
-        return nullptr;  // special case
-    }
-    if (const Symbol* symbol = dcast<Symbol>(expr)) {
-        return env->get(symbol->name);
-    }
-    const Cons* cons = dcast<Cons>(expr);
-    if (!cons) {
-        return expr;  // e. g. number;
-    }
-    auto x = Eval(cons->left, env);
-    const Procedure* proc = dynamic_cast<const Procedure*>(x.get());
-    assert(proc);
-    return proc->eval(cons->right, env);
-}
 
 class Quote : public Procedure {
 public:
@@ -346,7 +271,7 @@ public:
     }
     void serialize(std::ostream* o) const override {
         *o << "(lambda ";
-        parameters->serialize(o);
+        Expression::Serialize(parameters.get(), o);
         *o << " ";
         dcast<Cons>(dcast<Cons>(procedure)->right)->innerSerialize(o);
         *o << ")";
@@ -385,6 +310,7 @@ const Number& to_number(const std::shared_ptr<Expression>& expr) {
 }
 
 typedef Number (*BinOp)(Number, Number);
+
 template <BinOp Op, int Identity>
 class Accumulate : public Procedure {
     static Number Do(
@@ -519,9 +445,68 @@ struct NumberOps {
     static bool GreaterEq(Number u, Number v) { return u >= v; }
 };
 
-static std::shared_ptr<Environment> CoreEnvironemnt() {
-    std::shared_ptr<Environment> empty;
-    std::shared_ptr<Environment> core = std::make_shared<Environment>(empty);
+}  // namespace
+////////////////////////////////////////////////////////////////////////////////
+void dissemblance::Expression::Serialize(const Expression* expr, std::ostream* o) {
+    if (expr) {
+        expr->serialize(o);
+    } else {
+        *o << "()";
+    }
+}
+
+std::shared_ptr<Expression> dissemblance::Parse(std::istream* i) {
+    assert(i);
+    Tokenizer tokenizer(i);
+    return parse_expression(&tokenizer);
+}
+
+dissemblance::Environment::Environment(std::shared_ptr<Environment> o) : outer(std::move(o)) {}
+
+void dissemblance::Environment::set(const std::string& s, std::shared_ptr<Expression> expr) {
+    map[s] = std::move(expr);
+}
+
+std::shared_ptr<Expression> dissemblance::Environment::get(
+        const std::shared_ptr<Expression>& e) const {
+    const Symbol* s = dcast<Symbol>(e);
+    return s ? this->get(s->name) : nullptr;
+}
+
+std::shared_ptr<Expression> dissemblance::Environment::get(const std::string& s) const {
+    const Environment* env = this;
+    do {
+        const auto emap = &env->map;
+        auto i = emap->find(s);
+        if (i != emap->end()) {
+            return i->second;
+        }
+        env = env->outer.get();
+    } while (env);
+    return nullptr;
+}
+
+std::shared_ptr<Expression> dissemblance::Eval(
+        const std::shared_ptr<Expression>& expr,
+        std::shared_ptr<Environment>& env) {
+    if (!expr) {
+        return nullptr;  // special case
+    }
+    if (const Symbol* symbol = dcast<Symbol>(expr)) {
+        return env->get(symbol->name);
+    }
+    const Cons* cons = dcast<Cons>(expr);
+    if (!cons) {
+        return expr;  // e. g. number;
+    }
+    auto x = Eval(cons->left, env);
+    const Procedure* proc = dynamic_cast<const Procedure*>(x.get());
+    assert(proc);
+    return proc->eval(cons->right, env);
+}
+
+std::shared_ptr<Environment> dissemblance::CoreEnvironemnt() {
+    std::shared_ptr<Environment> core = std::make_shared<Environment>(nullptr);
     core->set("if", std::make_shared<If>());
     core->set("define", std::make_shared<Define>());
     core->set("quote", std::make_shared<Quote>());
@@ -540,16 +525,3 @@ static std::shared_ptr<Environment> CoreEnvironemnt() {
     return std::move(core);
 }
 
-int main() {
-    std::shared_ptr<Environment> env = CoreEnvironemnt();
-    while (true) {
-        std::shared_ptr<Expression> expr = Parse(&std::cin);
-        if (expr) {
-            Expression::Serialize(Eval(expr, env), &std::cout);
-            std::cout << std::endl;
-        } else {
-            break;
-        }
-    }
-    return 0;
-}

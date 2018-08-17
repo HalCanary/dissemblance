@@ -6,8 +6,12 @@
  */
 #ifndef number_DEFINED
 #define number_DEFINED
-#include <cstring>
+
+#include <cassert>
 #include <cmath>
+#include <cstring>
+#include <sstream>
+
 class Number {
 public:
     explicit Number(int v) : intValue(static_cast<int64_t>(v)), type(intType) {}
