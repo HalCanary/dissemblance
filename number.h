@@ -6,6 +6,8 @@
  */
 #ifndef number_DEFINED
 #define number_DEFINED
+#include <cstring>
+#include <cmath>
 class Number {
 public:
     explicit Number(int v) : intValue(static_cast<int64_t>(v)), type(intType) {}
@@ -30,55 +32,24 @@ public:
             default: assert(false);
         }
     }
-    Number operator+(Number rhs) const {
-        if (BothInts(*this, rhs)) {
-            return Number(intValue + rhs.intValue);
-        }
-        return Number(double(*this) + double(rhs));
-    }
-    Number operator-(Number rhs) const {
-        if (BothInts(*this, rhs)) {
-            return Number(intValue - rhs.intValue);
-        }
-        return Number(double(*this) - double(rhs));
-    }
-    Number operator*(Number rhs) const {
-        if (BothInts(*this, rhs)) {
-            return Number(intValue * rhs.intValue);
-        }
-        return Number(double(*this) * double(rhs));
-    }
-    Number operator/(Number rhs) const {
-        if (BothInts(*this, rhs)) {
-            return Number(intValue / rhs.intValue);
-        }
-        return Number(double(*this) / double(rhs));
-    }
     Number operator%(Number rhs) const {
-        if (BothInts(*this, rhs)) {
-            return Number(intValue % rhs.intValue);
-        }
-        return Number(std::fmod(double(*this), double(rhs)));
+        return Number(BothInts(*this, rhs) ? intValue % rhs.intValue : 0);
     }
-    bool operator==(Number rhs) const {
-        if (BothInts(*this, rhs)) {
-            return intValue == rhs.intValue;
+    #define INFIX_OPERATOR(RESULT_TYPE, OPERATOR)             \
+        RESULT_TYPE operator OPERATOR(Number rhs) const {     \
+            return BothInts(*this, rhs)                       \
+                ? Number(intValue OPERATOR rhs.intValue)      \
+                : Number(double(*this) OPERATOR double(rhs)); \
         }
-        return double(*this) == double(rhs);
-    }
+    INFIX_OPERATOR(Number, +)
+    INFIX_OPERATOR(Number, -)
+    INFIX_OPERATOR(Number, *)
+    INFIX_OPERATOR(Number, /)
+    INFIX_OPERATOR(bool, ==)
+    INFIX_OPERATOR(bool, >)
+    INFIX_OPERATOR(bool, <)
+    #undef INFIX_OPERATOR
     bool operator!=(Number rhs) const { return !(*this == rhs); }
-    bool operator>(Number rhs) const {
-        if (BothInts(*this, rhs)) {
-            return intValue > rhs.intValue;
-        }
-        return double(*this) > double(rhs);
-    }
-    bool operator<(Number rhs) const {
-        if (BothInts(*this, rhs)) {
-            return intValue < rhs.intValue;
-        }
-        return double(*this) < double(rhs);
-    }
     bool operator>=(Number rhs) const { return !(*this < rhs); }
     bool operator<=(Number rhs) const { return !(*this > rhs); }
     Number& operator+=(Number rhs) { return *this = *this + rhs; }
