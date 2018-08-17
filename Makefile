@@ -5,9 +5,9 @@ test: bin/dissemblance
 
 CXXFLAGS := $(CXXFLAGS) --std=c++11
 
-HEADERS := number.h dissemblance.h
+HEADERS := $(wildcard src/*.h)
 
-bin/%.o : %.cpp $(HEADERS)
+bin/%.o : src/%.cpp $(HEADERS)
 	mkdir -p bin
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c $< -o $@
 
