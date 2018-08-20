@@ -42,6 +42,20 @@ test '(quote foo)' 'foo'
 test '(quote (foo bar baz))' '(foo bar baz)'
 test '(list 1 2 3)' '(1 2 3)'
 test '(list 1 2 (quote foo) 4)' '(1 2 foo 4)'
+test '(cons 1 2)' '(1 . 2)'
+test '(cons 1 ())' '(1)'
+test '(cons () ())' '(())'
+test '(cons 1 (cons 2 (cons 3 ())))' '(1 2 3)'
+
+test '(car (cons 1 2))' '1'
+test '(car (cons 1 ()))' '1'
+test '(car (cons () ()))' '()'
+test '(car (cons 1 (cons 2 (cons 3 ()))))' '1'
+
+test '(cdr (cons 1 2))' '2'
+test '(cdr (cons 1 ()))' '()'
+test '(cdr (cons () ()))' '()'
+test '(cdr (cons 1 (cons 2 (cons 3 ()))))' '(2 3)'
 
 if [ "$GOOD" ]; then
     echo good

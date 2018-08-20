@@ -459,6 +459,46 @@ public:
     }
 };
 
+class ConsProc : public Procedure {
+public:
+    void serialize(std::ostream* o) const override { *o << "cons"; }
+    std::shared_ptr<Expression> eval(
+            const std::shared_ptr<Expression>& expr,
+            std::shared_ptr<Environment>& env) const override {
+        assert(2 == length(expr));
+        return std::make_shared<Cons>(Eval(get_item(expr, 0), env),
+                                      Eval(get_item(expr, 1), env));
+    }
+};
+
+class CarProc : public Procedure {
+public:
+    void serialize(std::ostream* o) const override { *o << "car"; }
+    std::shared_ptr<Expression> eval(
+            const std::shared_ptr<Expression>& expr,
+            std::shared_ptr<Environment>& env) const override {
+        assert(1 == length(expr));
+        auto value = Eval(get_item(expr, 0), env);
+        const Cons* c = dcastCons(value);
+        assert(c);
+        return std::move(c->left);
+    }
+};
+
+class CdrProc : public Procedure {
+public:
+    void serialize(std::ostream* o) const override { *o << "cdr"; }
+    std::shared_ptr<Expression> eval(
+            const std::shared_ptr<Expression>& expr,
+            std::shared_ptr<Environment>& env) const override {
+        assert(1 == length(expr));
+        auto value = Eval(get_item(expr, 0), env);
+        const Cons* c = dcastCons(value);
+        assert(c);
+        return std::move(c->right);
+    }
+};
+
 struct NumberOps {
     static Number Add(Number u, Number v) { return u + v; }
     static Number Multiply(Number u, Number v) { return u * v; }
@@ -527,6 +567,11 @@ std::shared_ptr<Expression> dissemblance::Eval(
     }
     auto x = Eval(cons->left, env);
     const Procedure* proc = x->asProcedure();
+    if (!proc) {
+        Expression::Serialize(x.get(), &std::cerr);
+        std::cerr << '\n';
+        assert(false);
+    }
     assert(proc);
     return proc->eval(cons->right, env);
 }
@@ -541,6 +586,9 @@ std::shared_ptr<Environment> dissemblance::CoreEnvironemnt() {
     core->set("-", std::make_shared<Subtract>());
     core->set("begin", std::make_shared<Begin>());
     core->set("lambda", std::make_shared<Lambda>());
+    core->set("cons", std::make_shared<ConsProc>());
+    core->set("car", std::make_shared<CarProc>());
+    core->set("cdr", std::make_shared<CdrProc>());
     core->set("list", std::make_shared<List>());
     core->set("/", std::make_shared<BinaryOperation<NumberOps::Divide> >("/"));
     core->set("=", std::make_shared<ComparisonOperation<NumberOps::Equal> >("="));
