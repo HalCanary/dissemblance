@@ -2,15 +2,6 @@
 
 GOOD=1
 test() {
-    Q="$1"
-    A="$2"
-    X="$(echo "$Q" | bin/dissemblance | tail -n 1)"
-    if ! [ "$A" = "$X" ] ; then
-        echo "\"$Q\" => \"$X\", not \"$A\""
-        GOOD=''
-    fi
-}
-test2() {
     Q="$(cat)"
     A="$1"
     X="$(echo "$Q" | bin/dissemblance | tail -n 1)"
@@ -20,57 +11,64 @@ test2() {
     fi
 }
 
-test '(if (quote T) (quote A) (quote B))' 'A'
-test '(if () (quote A) (quote B))' 'B'
-test "(if 'T 'A 'B)" "A"
-test "(if () 'A 'B)" "B"
-test '(define x 3) (+ x x)' '6'
-test '(+)' '0'
-test '(+ 99)' '99'
-test '(* 99)' '99'
-test '(* 99 10)' '990'
-test '(* 99.5 10)' '995'
-test '(+ 99 1.0e3)' '1099'
-test '(+ 3 9 1)' '13'
-test '(- 1)' '-1'
-test '(- 3 1)' '2'
-test '((lambda (x) (+ x x)) 5)' '10'
-test '(define double (lambda (x) (+ x x))) (double 5)' '10'
-test '((lambda (x y) (+ x x y)) 5 6)' '16'
-test '(= 4 4)' '1'
-test '(= 0 4)' '()'
-test '(!= (- 2 2) 4)' '1'
-test '(< 1 2)' '1'
-test '(> 1 2)' '()'
-test '(> 1 2)' '()'
-test '(< 1 2)' '1'
+echo '(if (quote T) (quote A) (quote B))' | test 'A'
+echo '(if () (quote A) (quote B))' | test 'B'
+echo "(if 'T 'A 'B)" | test "A"
+echo "(if () 'A 'B)" | test "B"
+echo '(define x 3) (+ x x)' | test '6'
+echo '(+)' | test '0'
+echo '(+ 99)' | test '99'
+echo '(* 99)' | test '99'
+echo '(* 99 10)' | test '990'
+echo '(* 99.5 10)' | test '995'
+echo '(+ 99 1.0e3)' | test '1099'
+echo '(+ 3 9 1)' | test '13'
+echo '(- 1)' | test '-1'
+echo '(- 3 1)' | test '2'
+echo '((lambda (x) (+ x x)) 5)' | test '10'
+echo '(define double (lambda (x) (+ x x))) (double 5)' | test '10'
+echo '((lambda (x y) (+ x x y)) 5 6)' | test '16'
+echo '(= 4 4)' | test '1'
+echo '(= 0 4)' | test '()'
+echo '(!= (- 2 2) 4)' | test '1'
+echo '(< 1 2)' | test '1'
+echo '(> 1 2)' | test '()'
+echo '(> 1 2)' | test '()'
+echo '(< 1 2)' | test '1'
 
 #RECURSION!
-test '(define fact (lambda (x) (if (= 0 x) 1 (* x (fact (- x 1)))))) (fact 5)' '120'
+test '120' <<EOF
+(define fact
+        (lambda (x)
+                (if (= 0 x)
+                    1
+                    (* x (fact (- x 1))))))
+(fact 5)
+EOF
 
-test '(define foo (lambda () (define bar 42) bar)) (foo)' '42'
-test '(quote foo)' 'foo'
-test '(quote (foo bar baz))' '(foo bar baz)'
-test "'foo" "foo"
-test "'(foo bar baz)" "(foo bar baz)"
-test '(list 1 2 3)' '(1 2 3)'
-test "(list 1 2 'foo 4)" '(1 2 foo 4)'
-test '(cons 1 2)' '(1 . 2)'
-test '(cons 1 ())' '(1)'
-test '(cons () ())' '(())'
-test '(cons 1 (cons 2 (cons 3 ())))' '(1 2 3)'
+echo '(define foo (lambda () (define bar 42) bar)) (foo)' | test '42'
+echo '(quote foo)' | test 'foo'
+echo '(quote (foo bar baz))' | test '(foo bar baz)'
+echo "'foo" | test "foo"
+echo "'(foo bar baz)" | test "(foo bar baz)"
+echo '(list 1 2 3)' | test '(1 2 3)'
+echo "(list 1 2 'foo 4)" | test '(1 2 foo 4)'
+echo '(cons 1 2)' | test '(1 . 2)'
+echo '(cons 1 ())' | test '(1)'
+echo '(cons () ())' | test '(())'
+echo '(cons 1 (cons 2 (cons 3 ())))' | test '(1 2 3)'
 
-test '(car (cons 1 2))' '1'
-test '(car (cons 1 ()))' '1'
-test '(car (cons () ()))' '()'
-test '(car (cons 1 (cons 2 (cons 3 ()))))' '1'
+echo '(car (cons 1 2))' | test '1'
+echo '(car (cons 1 ()))' | test '1'
+echo '(car (cons () ()))' | test '()'
+echo '(car (cons 1 (cons 2 (cons 3 ()))))' | test '1'
 
-test '(cdr (cons 1 2))' '2'
-test '(cdr (cons 1 ()))' '()'
-test '(cdr (cons () ()))' '()'
-test '(cdr (cons 1 (cons 2 (cons 3 ()))))' '(2 3)'
+echo '(cdr (cons 1 2))' | test '2'
+echo '(cdr (cons 1 ()))' | test '()'
+echo '(cdr (cons () ()))' | test '()'
+echo '(cdr (cons 1 (cons 2 (cons 3 ()))))' | test '(2 3)'
 
-test2 120 << EOF
+test 120 << EOF
 (define fact
   (lambda (x)
    (if (= 0 x)
@@ -79,7 +77,7 @@ test2 120 << EOF
 (fact 5)
 EOF
 
-test2 13 << EOF
+test 13 << EOF
 (define fib
   (lambda (i)
       (define fib-recursive (lambda (a b i)
