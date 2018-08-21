@@ -7,8 +7,25 @@
 #include <cassert>
 #include <iostream>
 #include <sstream>
+#include <unordered_map>
 
 using namespace dissemblance;
+
+struct dissemblance::Environment::Impl {
+    std::shared_ptr<Environment::Impl> outer;
+    std::unordered_map<std::string, std::shared_ptr<Expression> > map;
+};
+
+dissemblance::Environment::Environment(Environment&&) = default;
+dissemblance::Environment::Environment(const Environment&) = default;
+Environment& dissemblance::Environment::operator=(Environment&&) = default;
+Environment& dissemblance::Environment::operator=(const Environment&) = default;
+
+using Env = dissemblance::Environment::Impl;
+
+static std::shared_ptr<Expression> evaluate(
+        const std::shared_ptr<Expression>& expr,
+        std::shared_ptr<Env>& env);
 
 static const Cons* dcastCons(const std::shared_ptr<Expression>& u) {
     return u ? u->asCons() : nullptr;
@@ -62,21 +79,39 @@ struct dissemblance::Cons : public Expression {
     }
 };
 
+static std::shared_ptr<Cons> make_cons(std::shared_ptr<Expression> l,
+                                       std::shared_ptr<Expression> r) {
+    return std::make_shared<Cons>(std::move(l), std::move(r));
+}
+
 struct dissemblance::Procedure : public Expression {
 public:
     const Procedure* asProcedure() const override { return this; }
     virtual std::shared_ptr<Expression> eval(
             const std::shared_ptr<Expression>& expr,
-            std::shared_ptr<Environment>& env) const = 0;
+            std::shared_ptr<Env>& env) const = 0;
 };
 
 namespace {
+
+static std::shared_ptr<Expression>* find(Env* env, const std::string& s) {
+    while (env) {
+        const auto emap = &env->map;
+        auto i = emap->find(s);
+        if (i != emap->end()) {
+            return &i->second;
+        }
+        env = env->outer.get();
+    }
+    return nullptr;
+}
 
 struct Token {
     enum Type {
         Atom,
         OpenParen,
         CloseParen,
+        Apostrophe,
         Dot,
         Eof,
     } type;
@@ -101,6 +136,8 @@ public:
                 case '\n':
                     this->read();
                     break;
+                case '\'':
+                    return Token:: Apostrophe;
                 case '(':
                     return Token::OpenParen;
                 case ')':
@@ -141,29 +178,40 @@ std::shared_ptr<Expression> MakeAtom(const std::string& s) {
     }
 }
 
-std::shared_ptr<Expression> parse_expression(Tokenizer*);
+static std::shared_ptr<dissemblance::Expression> quote();
 
-std::shared_ptr<Expression> parse_list(Tokenizer* tokenizer) {
-    std::shared_ptr<Expression> left, right;
+static std::shared_ptr<Expression> parse_expression(Tokenizer*);
+
+static std::shared_ptr<Expression> parse_list(Tokenizer*);
+
+static std::shared_ptr<Expression> parse_rest(Tokenizer* tokenizer) {
+    std::shared_ptr<Expression> right;
+    if (Token::Dot == tokenizer->peek()) {
+        tokenizer->next();
+        right = parse_expression(tokenizer);
+        assert(tokenizer->peek() == Token::CloseParen);
+        tokenizer->next();
+    } else {
+        right = parse_list(tokenizer);
+    }
+    return right;
+}
+
+static std::shared_ptr<Expression> parse_list(Tokenizer* tokenizer) {
+    std::shared_ptr<Expression> left;
     Token token = tokenizer->next();
     switch (token.type) {
         case Token::Atom:
             left = MakeAtom(token.atom);
-            if (Token::Dot == tokenizer->peek()) {
-                tokenizer->next();
-                right = parse_expression(tokenizer);
-                assert(tokenizer->peek() == Token::CloseParen);
-                tokenizer->next();
-            } else {
-                right = parse_list(tokenizer);
-            }
-            return std::make_shared<Cons>(std::move(left), std::move(right));
+            return make_cons(std::move(left), parse_rest(tokenizer));
         case Token::OpenParen:
             left = parse_list(tokenizer);
-            right = parse_list(tokenizer);
-            return std::make_shared<Cons>(std::move(left), std::move(right));
+            return make_cons(std::move(left), parse_list(tokenizer));
         case Token::CloseParen:
             return nullptr;
+        case Token::Apostrophe:
+            left = make_cons(quote(), make_cons(parse_expression(tokenizer), nullptr));
+            return make_cons(std::move(left), parse_rest(tokenizer));
         case Token::Eof:
         case Token::Dot:
         default:
@@ -172,9 +220,11 @@ std::shared_ptr<Expression> parse_list(Tokenizer* tokenizer) {
     }
 }
 
-std::shared_ptr<Expression> parse_expression(Tokenizer* tokenizer) {
+static std::shared_ptr<Expression> parse_expression(Tokenizer* tokenizer) {
     Token token = tokenizer->next();
     switch (token.type) {
+        case Token::Apostrophe:
+            return make_cons(quote(), make_cons(parse_expression(tokenizer), nullptr));
         case Token::Atom:
             return MakeAtom(token.atom);
         case Token::OpenParen:
@@ -228,23 +278,27 @@ public:
     void serialize(std::ostream* o) const override { *o << "quote"; }
     std::shared_ptr<Expression> eval(
             const std::shared_ptr<Expression>& expr,
-            std::shared_ptr<Environment>& env) const override {
+            std::shared_ptr<Env>& env) const override {
         assert(1 == length(expr));
         return get_item(expr, 0);
     }
 };
 
+static std::shared_ptr<dissemblance::Expression> quote() {
+   return std::make_shared<Quote>();
+}
+
 class List : public Procedure {
     void serialize(std::ostream* o) const override { *o << "list"; }
     std::shared_ptr<Expression> eval(
             const std::shared_ptr<Expression>& expr,
-            std::shared_ptr<Environment>& env) const override {
+            std::shared_ptr<Env>& env) const override {
         std::shared_ptr<Cons> top;
         if (const Cons* c = dcastCons(expr)) {
-            top = std::make_shared<Cons>(Eval(c->left, env), nullptr);
+            top = make_cons(evaluate(c->left, env), nullptr);
             Cons* ptr = top.get();
-            while (c = dcastCons(c->right)) {
-                ptr->right = std::make_shared<Cons>(Eval(c->left, env), nullptr);
+            while ((c = dcastCons(c->right))) {
+                ptr->right = make_cons(evaluate(c->left, env), nullptr);
                 ptr = (Cons*)(ptr->right.get());
             }
         }
@@ -257,17 +311,17 @@ public:
     void serialize(std::ostream* o) const override { *o << "begin"; }
     std::shared_ptr<Expression> eval(
             const std::shared_ptr<Expression>& expr,
-            std::shared_ptr<Environment>& env) const override {
+            std::shared_ptr<Env>& env) const override {
         return Begin::Beginner(expr, env);
     }
 
 private:
     static std::shared_ptr<Expression> Beginner(
             const std::shared_ptr<Expression>& expr,
-            std::shared_ptr<Environment>& env) {
+            std::shared_ptr<Env>& env) {
         const Cons* cons = dcastCons(expr);
         assert(cons); // takes list
-        auto value = Eval(cons->left, env);
+        auto value = evaluate(cons->left, env);
         if (cons->right) {
             return Begin::Beginner(cons->right, env);
         } else {
@@ -279,11 +333,11 @@ private:
 class LambdaProc : public Procedure {
     std::shared_ptr<Expression> parameters;
     std::shared_ptr<Expression> procedure;
-    std::shared_ptr<Environment> environment;
+    std::shared_ptr<Env> environment;
 public:
     // (lambda (x) (+ 3 x))
     // (lambda (x y) (+ 3 x y))
-    LambdaProc(std::shared_ptr<Expression> expr, std::shared_ptr<Environment>& env)
+    LambdaProc(std::shared_ptr<Expression> expr, std::shared_ptr<Env>& env)
         : environment(env) {
         const Cons* cons = dcastCons(expr);
         assert(cons); // takes list
@@ -292,8 +346,7 @@ public:
 
         assert(cons->right);
         assert(length(cons->right) >= 1);
-        procedure = std::make_shared<Cons>(
-                std::make_shared<Symbol>(std::string("begin")), cons->right);
+        procedure = make_cons(std::make_shared<Symbol>(std::string("begin")), cons->right);
     }
     void serialize(std::ostream* o) const override {
         *o << "(lambda ";
@@ -304,18 +357,19 @@ public:
     }
     std::shared_ptr<Expression> eval(
             const std::shared_ptr<Expression>& arguments,
-            std::shared_ptr<Environment>& env) const override {
-        auto scope = std::make_shared<Environment>(environment);
+            std::shared_ptr<Env>& env) const override {
+        auto scope = std::make_shared<Env>();
+        scope->outer = environment;
         const Cons* params = dcastCons(parameters);
         const Cons* args = dcastCons(arguments);
         while (params) {
             const std::string& symb = get_symbol(params->left);
-            scope->set(symb, Eval(args->left, env));
+            scope->map[symb] = evaluate(args->left, env);
             params = dcastCons(params->right);
             args = dcastCons(args->right);
             assert((params == nullptr) == (args == nullptr));
         }
-        return Eval(procedure, scope);
+        return evaluate(procedure, scope);
     }
 };
 
@@ -324,7 +378,7 @@ public:
     void serialize(std::ostream* o) const override { *o << "LAMBDA"; }
     std::shared_ptr<Expression> eval(
             const std::shared_ptr<Expression>& expr,
-            std::shared_ptr<Environment>& env) const override {
+            std::shared_ptr<Env>& env) const override {
         return std::make_shared<LambdaProc>(expr, env);
     }
 };
@@ -341,7 +395,7 @@ template <BinOp Op, int Identity>
 class Accumulate : public Procedure {
     static Number Do(
             const std::shared_ptr<Expression>& expr,
-            std::shared_ptr<Environment>& env,
+            std::shared_ptr<Env>& env,
             Number accumulator) {
         const Cons* c = dcastCons(expr);
         if (!c) {
@@ -349,7 +403,7 @@ class Accumulate : public Procedure {
         } else {
             return Accumulate<Op, Identity>::Do(
                     c->right, env,
-                    Op(accumulator, to_number(Eval(c->left, env))));
+                    Op(accumulator, to_number(evaluate(c->left, env))));
         }
     }
     const char* name;
@@ -359,7 +413,7 @@ public:
     void serialize(std::ostream* o) const override { *o << name; }
     std::shared_ptr<Expression> eval(
             const std::shared_ptr<Expression>& expr,
-            std::shared_ptr<Environment>& env) const override {
+            std::shared_ptr<Env>& env) const override {
         return std::make_shared<NumberValue>(
                 Accumulate<Op, Identity>::Do(expr, env, Number(Identity)));
     }
@@ -371,17 +425,17 @@ public:
     void serialize(std::ostream* o) const override { *o << "SUBTRACT"; }
     std::shared_ptr<Expression> eval(
             const std::shared_ptr<Expression>& expr,
-            std::shared_ptr<Environment>& env) const override {
+            std::shared_ptr<Env>& env) const override {
         static const Number ZERO(0);
         switch (length(expr)) {
             case 1:
                 // (- value)
                 return std::make_shared<NumberValue>(
-                        ZERO - to_number(Eval(get_item(expr, 0), env)));
+                        ZERO - to_number(evaluate(get_item(expr, 0), env)));
             case 2:
                 return std::make_shared<NumberValue>(
-                        to_number(Eval(get_item(expr, 0), env))
-                        - to_number(Eval(get_item(expr, 1), env)));
+                        to_number(evaluate(get_item(expr, 0), env))
+                        - to_number(evaluate(get_item(expr, 1), env)));
             default:
                 assert(false);
         }
@@ -397,11 +451,11 @@ public:
     void serialize(std::ostream* o) const override { *o << name; }
     std::shared_ptr<Expression> eval(
             const std::shared_ptr<Expression>& expr,
-            std::shared_ptr<Environment>& env) const override {
+            std::shared_ptr<Env>& env) const override {
         assert(2 == length(expr));
         return std::make_shared<NumberValue>(
-                Op(to_number(Eval(get_item(expr, 0), env)),
-                   to_number(Eval(get_item(expr, 1), env))));
+                Op(to_number(evaluate(get_item(expr, 0), env)),
+                   to_number(evaluate(get_item(expr, 1), env))));
     }
 };
 
@@ -415,10 +469,10 @@ public:
     void serialize(std::ostream* o) const override { *o << name; }
     std::shared_ptr<Expression> eval(
             const std::shared_ptr<Expression>& expr,
-            std::shared_ptr<Environment>& env) const override {
+            std::shared_ptr<Env>& env) const override {
         assert(2 == length(expr));
-        if (Op(to_number(Eval(get_item(expr, 0), env)),
-               to_number(Eval(get_item(expr, 1), env)))) {
+        if (Op(to_number(evaluate(get_item(expr, 0), env)),
+               to_number(evaluate(get_item(expr, 1), env)))) {
             return std::make_shared<NumberValue>(Number(1));  // TODO: intern this.
         } else {
             return nullptr;
@@ -432,15 +486,32 @@ public:
     void serialize(std::ostream* o) const override { *o << "if"; }
     std::shared_ptr<Expression> eval(
             const std::shared_ptr<Expression>& expr,
-            std::shared_ptr<Environment>& env) const override {
+            std::shared_ptr<Env>& env) const override {
         //        0     1    2
         // (if . (cond then else))
         assert(3 == length(expr));
-        if (Eval(get_item(expr, 0), env)) {
-            return Eval(get_item(expr, 1), env);
+        if (evaluate(get_item(expr, 0), env)) {
+            return evaluate(get_item(expr, 1), env);
         } else {
-            return Eval(get_item(expr, 2), env);
+            return evaluate(get_item(expr, 2), env);
         }
+    }
+};
+
+class Set : public Procedure {
+public:
+    void serialize(std::ostream* o) const override { *o << "set!"; }
+    std::shared_ptr<Expression> eval(
+            const std::shared_ptr<Expression>& expr,
+            std::shared_ptr<Env>& env) const override {
+        //          0        1
+        // (set! . (variable (+ b c d))
+        assert(2 == length(expr));
+        const std::string& symbol = get_symbol(get_item(expr, 0));
+        std::shared_ptr<Expression>* ptr = find(env.get(), symbol);
+        assert(ptr);
+        *ptr = evaluate(get_item(expr, 1), env);
+        return nullptr;
     }
 };
 
@@ -449,11 +520,13 @@ public:
     void serialize(std::ostream* o) const override { *o << "define"; }
     std::shared_ptr<Expression> eval(
             const std::shared_ptr<Expression>& expr,
-            std::shared_ptr<Environment>& env) const override {
+            std::shared_ptr<Env>& env) const override {
         //            0        1
         // (define . (variable (+ b c d))
         assert(2 == length(expr));
-        env->set(get_symbol(get_item(expr, 0)), Eval(get_item(expr, 1), env));
+        const std::string& symbol = get_symbol(get_item(expr, 0));
+        assert(env->map.find(symbol) == env->map.end());
+        env->map[symbol] = evaluate(get_item(expr, 1), env);
         // todo: define procedures without lambda keyword.
         return nullptr;
     }
@@ -464,10 +537,10 @@ public:
     void serialize(std::ostream* o) const override { *o << "cons"; }
     std::shared_ptr<Expression> eval(
             const std::shared_ptr<Expression>& expr,
-            std::shared_ptr<Environment>& env) const override {
+            std::shared_ptr<Env>& env) const override {
         assert(2 == length(expr));
-        return std::make_shared<Cons>(Eval(get_item(expr, 0), env),
-                                      Eval(get_item(expr, 1), env));
+        return make_cons(evaluate(get_item(expr, 0), env),
+                         evaluate(get_item(expr, 1), env));
     }
 };
 
@@ -476,9 +549,9 @@ public:
     void serialize(std::ostream* o) const override { *o << "car"; }
     std::shared_ptr<Expression> eval(
             const std::shared_ptr<Expression>& expr,
-            std::shared_ptr<Environment>& env) const override {
+            std::shared_ptr<Env>& env) const override {
         assert(1 == length(expr));
-        auto value = Eval(get_item(expr, 0), env);
+        auto value = evaluate(get_item(expr, 0), env);
         const Cons* c = dcastCons(value);
         assert(c);
         return std::move(c->left);
@@ -490,9 +563,9 @@ public:
     void serialize(std::ostream* o) const override { *o << "cdr"; }
     std::shared_ptr<Expression> eval(
             const std::shared_ptr<Expression>& expr,
-            std::shared_ptr<Environment>& env) const override {
+            std::shared_ptr<Env>& env) const override {
         assert(1 == length(expr));
-        auto value = Eval(get_item(expr, 0), env);
+        auto value = evaluate(get_item(expr, 0), env);
         const Cons* c = dcastCons(value);
         assert(c);
         return std::move(c->right);
@@ -513,6 +586,9 @@ struct NumberOps {
 
 }  // namespace
 ////////////////////////////////////////////////////////////////////////////////
+Environment::Environment() = default;
+Environment::~Environment() = default;
+
 void dissemblance::Expression::Serialize(const Expression* expr, std::ostream* o) {
     if (expr) {
         expr->serialize(o);
@@ -527,45 +603,25 @@ std::shared_ptr<Expression> dissemblance::Parse(std::istream* i) {
     return parse_expression(&tokenizer);
 }
 
-dissemblance::Environment::Environment(std::shared_ptr<Environment> o) : outer(std::move(o)) {}
-
-void dissemblance::Environment::set(const std::string& s, std::shared_ptr<Expression> expr) {
-    map[s] = std::move(expr);
-}
-
-std::shared_ptr<Expression> dissemblance::Environment::get(
-        const std::shared_ptr<Expression>& e) const {
-    const Symbol* s = dcastSymbol(e);
-    return s ? this->get(s->name) : nullptr;
-}
-
-std::shared_ptr<Expression> dissemblance::Environment::get(const std::string& s) const {
-    const Environment* env = this;
-    do {
-        const auto emap = &env->map;
-        auto i = emap->find(s);
-        if (i != emap->end()) {
-            return i->second;
-        }
-        env = env->outer.get();
-    } while (env);
-    return nullptr;
-}
-
-std::shared_ptr<Expression> dissemblance::Eval(
+static std::shared_ptr<Expression> evaluate(
         const std::shared_ptr<Expression>& expr,
-        std::shared_ptr<Environment>& env) {
+        std::shared_ptr<Env>& env) {
     if (!expr) {
         return nullptr;  // special case
     }
     if (const Symbol* symbol = dcastSymbol(expr)) {
-        return env->get(symbol->name);
+        std::shared_ptr<Expression>* ptr = find(env.get(), symbol->name);
+        if (!ptr) {
+            std::cerr << "missing symbol: '" << symbol->name << "'.  :(\n";
+        }
+        assert(ptr);
+        return *ptr;
     }
     const Cons* cons = dcastCons(expr);
     if (!cons) {
         return expr;  // e. g. number;
     }
-    auto x = Eval(cons->left, env);
+    auto x = evaluate(cons->left, env);
     const Procedure* proc = x->asProcedure();
     if (!proc) {
         Expression::Serialize(x.get(), &std::cerr);
@@ -576,28 +632,36 @@ std::shared_ptr<Expression> dissemblance::Eval(
     return proc->eval(cons->right, env);
 }
 
-std::shared_ptr<Environment> dissemblance::CoreEnvironemnt() {
-    std::shared_ptr<Environment> core = std::make_shared<Environment>(nullptr);
-    core->set("if", std::make_shared<If>());
-    core->set("define", std::make_shared<Define>());
-    core->set("quote", std::make_shared<Quote>());
-    core->set("+", std::make_shared<Accumulate<NumberOps::Add, 0> >("+"));
-    core->set("*", std::make_shared<Accumulate<NumberOps::Multiply, 1> >("*"));
-    core->set("-", std::make_shared<Subtract>());
-    core->set("begin", std::make_shared<Begin>());
-    core->set("lambda", std::make_shared<Lambda>());
-    core->set("cons", std::make_shared<ConsProc>());
-    core->set("car", std::make_shared<CarProc>());
-    core->set("cdr", std::make_shared<CdrProc>());
-    core->set("list", std::make_shared<List>());
-    core->set("/", std::make_shared<BinaryOperation<NumberOps::Divide> >("/"));
-    core->set("=", std::make_shared<ComparisonOperation<NumberOps::Equal> >("="));
-    core->set("==", std::make_shared<ComparisonOperation<NumberOps::Equal> >("=="));
-    core->set("!=", std::make_shared<ComparisonOperation<NumberOps::NotEqual> >("!="));
-    core->set("<", std::make_shared<ComparisonOperation<NumberOps::LessThan> >("<"));
-    core->set(">", std::make_shared<ComparisonOperation<NumberOps::GreaterThan> >(">"));
-    core->set("<=", std::make_shared<ComparisonOperation<NumberOps::LessEq> >("<="));
-    core->set(">=", std::make_shared<ComparisonOperation<NumberOps::GreaterEq> >(">="));
-    return std::move(core);
+std::shared_ptr<Expression> dissemblance::Eval(
+        const std::shared_ptr<Expression>& expr,
+        Environment& env) {
+    return evaluate(expr, env.impl);
+}
+
+dissemblance::Environment dissemblance::CoreEnvironemnt() {
+    Environment env;
+    env.impl = std::make_shared<Env>();
+    auto& map = env.impl->map;
+    map["if"] = std::make_shared<If>();
+    map["define"] = std::make_shared<Define>();
+    map["set!"] = std::make_shared<Set>();
+    map["quote"] = quote();
+    map["+"] = std::make_shared<Accumulate<NumberOps::Add, 0> >("+");
+    map["*"] = std::make_shared<Accumulate<NumberOps::Multiply, 1> >("*");
+    map["-"] = std::make_shared<Subtract>();
+    map["begin"] = std::make_shared<Begin>();
+    map["lambda"] = std::make_shared<Lambda>();
+    map["cons"] = std::make_shared<ConsProc>();
+    map["car"] = std::make_shared<CarProc>();
+    map["cdr"] = std::make_shared<CdrProc>();
+    map["list"] = std::make_shared<List>();
+    map["/"] = std::make_shared<BinaryOperation<NumberOps::Divide> >("/");
+    map["="] = std::make_shared<ComparisonOperation<NumberOps::Equal> >("=");
+    map["!="] = std::make_shared<ComparisonOperation<NumberOps::NotEqual> >("!=");
+    map["<"] = std::make_shared<ComparisonOperation<NumberOps::LessThan> >("<");
+    map[">"] = std::make_shared<ComparisonOperation<NumberOps::GreaterThan> >(">");
+    map["<="] = std::make_shared<ComparisonOperation<NumberOps::LessEq> >("<=");
+    map[">="] = std::make_shared<ComparisonOperation<NumberOps::GreaterEq> >(">=");
+    return std::move(env);
 }
 

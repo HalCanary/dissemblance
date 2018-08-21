@@ -11,7 +11,6 @@
 #include <memory>
 #include <ostream>
 #include <string>
-#include <unordered_map>
 
 namespace dissemblance {
 
@@ -33,20 +32,21 @@ public:
 
 class Environment {
 public:
-    Environment(std::shared_ptr<Environment>);
-    void set(const std::string& s, std::shared_ptr<Expression> expr);
-    std::shared_ptr<Expression> get(const std::shared_ptr<Expression>& e) const;
-    std::shared_ptr<Expression> get(const std::string& s) const;
-private:
-    std::unordered_map<std::string, std::shared_ptr<Expression> > map;
-    std::shared_ptr<Environment> outer;
+    Environment();
+    ~Environment();
+    Environment(Environment&&);
+    Environment(const Environment&);
+    Environment& operator=(Environment&&);
+    Environment& operator=(const Environment&);
+    struct Impl;
+    std::shared_ptr<Impl> impl;
 };
 
 std::shared_ptr<Expression> Parse(std::istream*);
 
-std::shared_ptr<Environment> CoreEnvironemnt(); 
+Environment CoreEnvironemnt();
 
-std::shared_ptr<Expression> Eval(const std::shared_ptr<Expression>&, std::shared_ptr<Environment>&);
+std::shared_ptr<Expression> Eval(const std::shared_ptr<Expression>&, Environment&);
 
 }
 
