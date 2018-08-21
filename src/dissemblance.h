@@ -4,9 +4,6 @@
 #ifndef dissemblance_DEFINED
 #define dissemblance_DEFINED
 
-// Supported operators:
-//     if define quote + - * / == != < > <= >= begin lambda
-
 #include <istream>
 #include <memory>
 #include <ostream>
